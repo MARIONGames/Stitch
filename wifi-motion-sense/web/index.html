@@ -1,0 +1,491 @@
+<title>WiFi Sense Live</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: a single-screen signals instrument — status banner on top, a live
+     CSI waterfall as the hero image, a motion trace, feature meters, controls. */
+  :root {
+    --bg: #f3f5f8;
+    --panel: #ffffff;
+    --panel-2: #eef1f6;
+    --ink: #0e1726;
+    --ink-dim: #5a677c;
+    --line: #d7dde6;
+    --accent: #0bbf9a;      /* signal teal */
+    --accent-ink: #065f4d;
+    --human: #10b981;
+    --nonhuman: #f59e0b;
+    --alert: #ef4444;
+    --quiet: #64748b;
+    --grid: rgba(14,23,38,0.06);
+    --wf-floor: #e9edf3;     /* waterfall background */
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --disp: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    --body: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #070a0f;
+      --panel: #0d131c;
+      --panel-2: #121a26;
+      --ink: #e8eef6;
+      --ink-dim: #8c9bb0;
+      --line: #1e2a3a;
+      --accent: #2ff0c6;
+      --accent-ink: #9df7e4;
+      --human: #34d399;
+      --nonhuman: #fbbf24;
+      --alert: #f87171;
+      --quiet: #7c8ba0;
+      --grid: rgba(255,255,255,0.05);
+      --wf-floor: #060b12;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #070a0f;
+    --panel: #0d131c;
+    --panel-2: #121a26;
+    --ink: #e8eef6;
+    --ink-dim: #8c9bb0;
+    --line: #1e2a3a;
+    --accent: #2ff0c6;
+    --accent-ink: #9df7e4;
+    --human: #34d399;
+    --nonhuman: #fbbf24;
+    --alert: #f87171;
+    --quiet: #7c8ba0;
+    --grid: rgba(255,255,255,0.05);
+    --wf-floor: #060b12;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--body);
+    -webkit-font-smoothing: antialiased;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 18px 34px;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .brand { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  h1 {
+    font-family: var(--disp); font-weight: 600; letter-spacing: -0.02em;
+    font-size: clamp(1.4rem, 6vw, 1.9rem); margin: 0; text-wrap: balance;
+  }
+  .sub { color: var(--ink-dim); font-size: 0.82rem; }
+  .theme-btn {
+    font-family: var(--mono); font-size: 0.72rem; color: var(--ink-dim);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+    padding: 6px 12px; cursor: pointer;
+  }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+
+  /* Verdict banner */
+  .verdict { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .vrow { display: flex; align-items: center; gap: 12px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--quiet); flex: none;
+         box-shadow: 0 0 0 0 rgba(0,0,0,0); transition: background .2s; }
+  .dot.live { animation: pulse 1.4s ease-out infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 color-mix(in srgb, var(--alert) 55%, transparent);} 70%{box-shadow:0 0 0 10px transparent;} 100%{box-shadow:0 0 0 0 transparent;} }
+  @media (prefers-reduced-motion: reduce){ .dot.live{animation:none;} }
+  .state { font-family: var(--disp); font-weight: 600; font-size: 1.05rem; letter-spacing: -0.01em; }
+  .state small { font-family: var(--mono); font-weight: 400; color: var(--ink-dim); font-size: 0.72rem; letter-spacing: 0; }
+
+  .who { display: flex; align-items: center; gap: 12px; }
+  .who-label { font-family: var(--disp); font-weight: 700; font-size: clamp(1.6rem,8vw,2.2rem); letter-spacing: -0.02em; line-height: 1; }
+  .who-label.human { color: var(--human); }
+  .who-label.nonhuman { color: var(--nonhuman); }
+  .who-label.idle { color: var(--ink-dim); }
+  .conf { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+  .conf .bar { height: 9px; background: var(--panel-2); border-radius: 999px; overflow: hidden; border: 1px solid var(--line); }
+  .conf .fill { height: 100%; width: 0%; border-radius: 999px; transition: width .25s ease, background .25s; }
+  .conf .legend { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 0.68rem; color: var(--ink-dim); }
+
+  /* Canvases */
+  .screen { position: relative; overflow: hidden; border-radius: 14px; }
+  .screen canvas { display: block; width: 100%; }
+  .cap { position: absolute; top: 8px; left: 12px; font-family: var(--mono); font-size: 0.66rem;
+         letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-dim);
+         background: color-mix(in srgb, var(--panel) 72%, transparent); padding: 3px 8px; border-radius: 6px; }
+  .wf-wrap { height: 190px; }
+  .tr-wrap { height: 96px; }
+
+  /* Feature meters */
+  .feats { padding: 12px 14px; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px 16px; }
+  .feat { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .feat .k { font-family: var(--mono); font-size: 0.68rem; color: var(--ink-dim); display: flex; justify-content: space-between; gap: 8px; }
+  .feat .k b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .feat .m { height: 6px; background: var(--panel-2); border-radius: 999px; overflow: hidden; border: 1px solid var(--line); }
+  .feat .mf { height: 100%; width: 0%; background: var(--accent); border-radius: 999px; transition: width .2s; }
+  .feat .mf.warn { background: var(--nonhuman); }
+
+  /* Controls */
+  .controls { padding: 13px 14px; display: flex; flex-direction: column; gap: 12px; }
+  .ctl-label { font-family: var(--mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-dim); }
+  .scenarios { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px; }
+  .scn { font-family: var(--body); font-size: 0.82rem; font-weight: 500; color: var(--ink);
+         background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+         padding: 9px 8px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 3px; transition: all .15s; }
+  .scn .ico { font-size: 1.15rem; line-height: 1; }
+  .scn small { font-size: 0.64rem; color: var(--ink-dim); }
+  .scn[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--ink); }
+  .scn[aria-pressed="true"] small { color: var(--accent-ink); }
+
+  .sliderrow { display: flex; align-items: center; gap: 12px; }
+  .sliderrow label { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-dim); white-space: nowrap; }
+  input[type=range] { flex: 1; accent-color: var(--accent); min-width: 0; }
+  .val { font-family: var(--mono); font-size: 0.72rem; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 2.4em; text-align: right; }
+
+  .note { font-size: 0.78rem; color: var(--ink-dim); line-height: 1.5; }
+  .note b { color: var(--ink); font-weight: 600; }
+  .note code { font-family: var(--mono); font-size: 0.92em; background: var(--panel-2); padding: 1px 5px; border-radius: 5px; border: 1px solid var(--line); }
+  details > summary { cursor: pointer; color: var(--accent-ink); font-size: 0.82rem; font-weight: 600; }
+  details[open] > summary { margin-bottom: 8px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <h1>WiFi Sense Live</h1>
+      <span class="sub">Motion &amp; human detection from WiFi channel state</span>
+    </div>
+    <button class="theme-btn" id="theme" type="button" aria-label="Toggle theme">◐ theme</button>
+  </header>
+
+  <section class="panel verdict">
+    <div class="vrow">
+      <span class="dot" id="dot"></span>
+      <span class="state" id="state">CALIBRATING<br><small id="statesub">learning the empty-room noise floor…</small></span>
+    </div>
+    <div class="who">
+      <span class="who-label idle" id="who">—</span>
+      <div class="conf">
+        <div class="bar"><span class="fill" id="conffill"></span></div>
+        <div class="legend"><span id="confpct">awaiting motion</span><span id="agree"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="panel screen wf-wrap">
+    <span class="cap">CSI motion waterfall · subcarrier × time</span>
+    <canvas id="wf"></canvas>
+  </div>
+
+  <div class="panel screen tr-wrap">
+    <span class="cap">aggregate motion signal</span>
+    <canvas id="tr"></canvas>
+  </div>
+
+  <section class="panel feats" id="feats"></section>
+
+  <section class="panel controls">
+    <span class="ctl-label">What is moving in the room?</span>
+    <div class="scenarios" id="scenarios"></div>
+    <div class="sliderrow">
+      <label for="sens">threshold</label>
+      <input type="range" id="sens" min="3" max="15" step="0.5" value="5">
+      <span class="val" id="sensval">×5.0</span>
+    </div>
+    <span class="note">Pick a scene — the detector self-calibrates on the empty room, then flags motion and classifies the mover live, exactly like the hardware pipeline.</span>
+  </section>
+
+  <section class="panel controls">
+    <details>
+      <summary>How this works &amp; running it for real</summary>
+      <p class="note">A WiFi receiver computes <b>Channel State Information</b> (amplitude + phase per OFDM subcarrier) for every packet it decodes from your router. A moving body reshapes the multipath between router and receiver; the waterfall above is that disturbance. A <b>human body</b> is a large reflector, so its motion is <b>coherent across subcarriers</b> and carries a slow breathing rhythm; a <b>pet</b> is small and incoherent; a <b>fan</b> is a fast, narrowband, highly periodic machine. The classifier reads exactly those features.</p>
+      <p class="note">This page runs on simulated CSI so it works on any phone with no hardware — a browser can't read your WiFi chip's CSI directly. For <b>real</b> capture, the matching Python app reads an <b>ESP32</b> (<code>ESP-CSI</code> firmware over USB) or <b>Nexmon / Intel 5300</b> pcap exports, and feeds them through this same detect→classify pipeline.</p>
+    </details>
+  </section>
+</div>
+
+<script>
+"use strict";
+(function () {
+  // ---- constants ---------------------------------------------------------
+  const N_SUB = 48;            // subcarriers
+  const FS = 20;               // analysis sample rate (Hz)
+  const WIN = 4.0;             // analysis window (s)
+  const WIN_LEN = Math.round(WIN * FS);
+  const HOP = 0.3;             // s between analyses
+
+  // ---- static channel ("the room") --------------------------------------
+  function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
+  const baseRand = rng(7);
+  function gauss(r) { let u = 0, v = 0; while (!u) u = r(); while (!v) v = r(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+  const baseMag = new Float64Array(N_SUB), basePhase = new Float64Array(N_SUB);
+  for (let i = 0; i < N_SUB; i++) { baseMag[i] = Math.max(0.2, 1 + 0.3*gauss(baseRand)); basePhase[i] = (baseRand()*2-1)*Math.PI; }
+
+  // ---- scenarios ---------------------------------------------------------
+  const SCENES = [
+    { id: "empty",        ico: "○", label: "Empty",   hint: "no one" },
+    { id: "human_still",  ico: "🧍", label: "Person",  hint: "still" },
+    { id: "human_moving", ico: "🚶", label: "Person",  hint: "walking" },
+    { id: "pet",          ico: "🐕", label: "Pet",     hint: "roaming" },
+    { id: "fan",          ico: "✺", label: "Fan",     hint: "machine" },
+  ];
+  let scene = "empty";
+  const noiseRand = rng(99);
+
+  // motion modulation per subcarrier for a given scene at time t
+  function modulation(sc, t) {
+    const m = new Float64Array(N_SUB);
+    if (sc === "empty") return m;
+    for (let i = 0; i < N_SUB; i++) {
+      if (sc === "human_still") {
+        const breath = 0.05*Math.sin(2*Math.PI*0.28*t);
+        const broad = 0.012*Math.sin(2*Math.PI*0.9*t + i*0.1);
+        m[i] = (breath + broad) * Math.cos(i*0.05);
+      } else if (sc === "human_moving") {
+        const gait = 0.12*Math.sin(2*Math.PI*1.8*t);
+        const sway = 0.06*Math.sin(2*Math.PI*0.7*t);
+        const breath = 0.03*Math.sin(2*Math.PI*0.25*t);
+        m[i] = (gait + sway + breath) * Math.cos(i*0.04) + 0.02*gauss(noiseRand);
+      } else if (sc === "pet") {
+        const jitter = 2.5 + 1.5*Math.sin(2*Math.PI*0.3*t);
+        const motion = 0.09*Math.sin(2*Math.PI*jitter*t + i*0.9);
+        m[i] = motion * Math.cos(i*0.4 + i) + 0.045*gauss(noiseRand);
+      } else if (sc === "fan") {
+        const spin = 0.15*Math.sin(2*Math.PI*6.0*t);
+        const harm = 0.04*Math.sin(2*Math.PI*12.0*t);
+        const loc = Math.exp(-Math.pow(i - N_SUB*0.4, 2) / (2*Math.pow(N_SUB*0.15,2)));
+        m[i] = (spin + harm) * loc;
+      }
+    }
+    return m;
+  }
+
+  function frame(t) {
+    const amp = new Float64Array(N_SUB);
+    const mod = modulation(scene, t);
+    for (let i = 0; i < N_SUB; i++) amp[i] = baseMag[i]*(1+mod[i]) + 0.01*gauss(noiseRand);
+    return amp;
+  }
+
+  // ---- rolling buffer of amplitude rows -----------------------------------
+  const buf = [];            // each: Float64Array(N_SUB)
+  const MAXBUF = WIN_LEN + 4;
+
+  // ---- signal analysis ----------------------------------------------------
+  function hann(n, N) { return 0.5 - 0.5*Math.cos(2*Math.PI*n/(N-1)); }
+
+  function analyse() {
+    if (buf.length < WIN_LEN) return null;
+    const rows = buf.slice(buf.length - WIN_LEN);   // WIN_LEN × N_SUB
+    const n = rows.length;
+    // per-subcarrier mean, normalise, dynamic component
+    const mean = new Float64Array(N_SUB);
+    for (const r of rows) for (let i = 0; i < N_SUB; i++) mean[i] += r[i];
+    for (let i = 0; i < N_SUB; i++) mean[i] /= n;
+    // dynamic[t][i]
+    const dyn = rows.map(r => { const d = new Float64Array(N_SUB); for (let i=0;i<N_SUB;i++){ const mn=mean[i]||1e-9; d[i]=(r[i]/mn)-1; } return d; });
+
+    // aggregate motion signal = mean across subcarriers (coherent motion survives)
+    const agg = new Float64Array(n);
+    for (let t=0;t<n;t++){ let s=0; for(let i=0;i<N_SUB;i++) s+=dyn[t][i]; agg[t]=s/N_SUB; }
+    // remove mean
+    let am=0; for(let t=0;t<n;t++) am+=agg[t]; am/=n; for(let t=0;t<n;t++) agg[t]-=am;
+    let energy=0; for(let t=0;t<n;t++) energy+=agg[t]*agg[t]; energy/=n;
+
+    // power spectrum of agg (Hann + naive DFT over half bins)
+    const half = Math.floor(n/2);
+    const spec = new Float64Array(half+1);
+    for (let k=0;k<=half;k++){ let re=0,im=0; for(let t=0;t<n;t++){ const w=hann(t,n); const a=2*Math.PI*k*t/n; re+=agg[t]*w*Math.cos(a); im-=agg[t]*w*Math.sin(a);} spec[k]=re*re+im*im; }
+    const binHz = FS/n;
+    let total=0; for(let k=0;k<=half;k++) total+=spec[k]; total+=1e-12;
+    const band=(lo,hi)=>{ let s=0; for(let k=0;k<=half;k++){ const f=k*binHz; if(f>=lo&&f<hi) s+=spec[k]; } return s; };
+    const resp=band(0.1,0.5)/total, activity=band(0.5,3.0)/total, mech=band(4.0,12.0)/total;
+    let domk=1,domv=-1; for(let k=1;k<=half;k++) if(spec[k]>domv){domv=spec[k];domk=k;}
+    const dominant = domk*binHz;
+    const bandRatio = Math.log1p((band(0.1,0.5)+band(0.5,3.0))/(band(4.0,12.0)+1e-9));
+
+    // periodicity: autocorr peak at lag>=3
+    let ac0=0; for(let t=0;t<n;t++) ac0+=agg[t]*agg[t]; ac0+=1e-12;
+    let per=0; for(let lag=3; lag<Math.floor(n/2); lag++){ let s=0; for(let t=0;t<n-lag;t++) s+=agg[t]*agg[t+lag]; const v=s/ac0; if(v>per) per=v; }
+    per=Math.max(0,Math.min(1,per));
+
+    // subcarrier coherence: mean |corr| across 12 evenly-spaced subcarriers
+    const idx=[]; for(let j=0;j<12;j++) idx.push(Math.round(j*(N_SUB-1)/11));
+    const series = idx.map(i=>{ const s=new Float64Array(n); for(let t=0;t<n;t++) s[t]=dyn[t][i]; let mm=0; for(let t=0;t<n;t++) mm+=s[t]; mm/=n; for(let t=0;t<n;t++) s[t]-=mm; return s; });
+    let csum=0,cn=0;
+    for(let a=0;a<series.length;a++) for(let b=a+1;b<series.length;b++){ let num=0,da=0,db=0; for(let t=0;t<n;t++){ num+=series[a][t]*series[b][t]; da+=series[a][t]*series[a][t]; db+=series[b][t]*series[b][t]; } const den=Math.sqrt(da*db)+1e-12; csum+=Math.abs(num/den); cn++; }
+    const coherence = cn? csum/cn : 0;
+
+    return { energy, resp, activity, mech, dominant, bandRatio, periodicity: per, coherence, agg };
+  }
+
+  // heuristic human-ness score (mirrors classifier.py _HeuristicModel)
+  function classify(f) {
+    const clip=(x,a,b)=>Math.max(a,Math.min(b,x));
+    let s = 0;
+    s += 3.0*(f.coherence - 0.45);
+    s += 2.5*f.resp;
+    s += 1.0*clip(f.bandRatio/3.0,0,1);
+    s -= 2.5*f.mech;
+    s -= 1.2*clip(f.periodicity-0.5,0,1);
+    s -= 1.0*clip((f.dominant-3.5)/6.0,0,1);
+    return 1/(1+Math.exp(-2.2*s));   // P(human)
+  }
+
+  // ---- adaptive motion detector -----------------------------------------
+  // Motion energy sits orders of magnitude above the empty-room floor, so a
+  // multiplicative threshold (energy > floor × ratio) is robust. The floor is a
+  // running MINIMUM of window energy: a present mover only ever raises energy,
+  // so it can never pull the floor up (which previously let a mover that was
+  // on-screen during start-up calibrate itself away). When the room is quiet
+  // the floor drifts gently upward to track slow environmental change; during
+  // motion it is frozen, so even sustained movement stays detected.
+  const CALIB = 3;                  // windows to settle before going live
+  let floorMean = null, ratioK = 5, calibN = 0, lastThr = 0;
+  function detect(energy) {
+    if (floorMean === null) { floorMean = energy; calibN = 1; return { motion:false, conf:0, calibrating:true }; }
+    if (energy < floorMean) floorMean = energy;         // min-track: floor = quietest seen
+    if (calibN < CALIB) { calibN++; return { motion:false, conf:0, calibrating:true }; }
+    lastThr = Math.max(floorMean * ratioK, 1e-7);
+    const motion = energy > lastThr;
+    if (!motion) floorMean = 0.97*floorMean + 0.03*energy;   // drift up only when quiet
+    return { motion, conf: motion ? 1 - Math.exp(-(energy/lastThr - 1)) : 0, calibrating:false };
+  }
+
+  // ---- palette (read from CSS so canvas follows the theme) ---------------
+  let PAL={};
+  function refreshPalette(){ const cs=getComputedStyle(document.documentElement);
+    const g=n=>cs.getPropertyValue(n).trim();
+    PAL={ ink:g('--ink'), dim:g('--ink-dim'), grid:g('--grid'), accent:g('--accent'),
+          human:g('--human'), nonhuman:g('--nonhuman'), alert:g('--alert'), floor:g('--wf-floor'), panel:g('--panel') };
+  }
+
+  // ---- canvases ----------------------------------------------------------
+  const wf=document.getElementById('wf'), wfx=wf.getContext('2d');
+  const tr=document.getElementById('tr'), trx=tr.getContext('2d');
+  let dpr=Math.max(1,Math.min(2,window.devicePixelRatio||1));
+  function fit(c){ const r=c.getBoundingClientRect(); c.width=Math.round(r.width*dpr); c.height=Math.round(r.height*dpr); }
+  function fitAll(){ dpr=Math.max(1,Math.min(2,window.devicePixelRatio||1)); fit(wf); fit(tr); clearScreens(); }
+  function clearScreens(){ wfx.fillStyle=PAL.floor; wfx.fillRect(0,0,wf.width,wf.height); }
+
+  // colormap: value 0..1 -> floor→accent→ink(bright)
+  function hex2rgb(h){ h=h.replace('#',''); if(h.length===3) h=h.split('').map(c=>c+c).join(''); return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)]; }
+  let cmap=[];
+  function buildCmap(){ const a=hex2rgb(PAL.floor||'#06101a'), b=hex2rgb(PAL.accent||'#2ff0c6'), c=[255,255,255];
+    cmap=[]; for(let i=0;i<=64;i++){ const t=i/64; let r,g,bl; if(t<0.65){ const u=t/0.65; r=a[0]+(b[0]-a[0])*u; g=a[1]+(b[1]-a[1])*u; bl=a[2]+(b[2]-a[2])*u; } else { const u=(t-0.65)/0.35; r=b[0]+(c[0]-b[0])*u; g=b[1]+(c[1]-b[1])*u; bl=b[2]+(c[2]-b[2])*u; } cmap.push(`rgb(${r|0},${g|0},${bl|0})`); } }
+  function colorFor(v){ const i=Math.max(0,Math.min(64,Math.round(v*64))); return cmap[i]; }
+
+  // push one column of dynamic magnitude into the waterfall
+  function pushColumn(dynRow){
+    const w=wf.width, h=wf.height, step=Math.max(1,Math.round(1*dpr));
+    wfx.drawImage(wf, -step, 0);                // scroll left
+    const cellH=h/N_SUB;
+    for(let i=0;i<N_SUB;i++){ const v=Math.min(1, Math.abs(dynRow[i])*9); wfx.fillStyle=colorFor(v); wfx.fillRect(w-step, i*cellH, step, Math.ceil(cellH)+1); }
+  }
+
+  function drawTrace(agg){
+    const w=tr.width,h=tr.height; trx.clearRect(0,0,w,h);
+    // midline grid
+    trx.strokeStyle=PAL.grid; trx.lineWidth=1*dpr; trx.beginPath(); trx.moveTo(0,h/2); trx.lineTo(w,h/2); trx.stroke();
+    if(!agg||!agg.length) return;
+    let mx=1e-6; for(const v of agg) mx=Math.max(mx,Math.abs(v)); mx=Math.max(mx,0.02);
+    trx.strokeStyle=lastMotion?(lastHuman?PAL.human:PAL.nonhuman):PAL.dim; trx.lineWidth=2*dpr; trx.lineJoin='round'; trx.beginPath();
+    for(let t=0;t<agg.length;t++){ const x=t/(agg.length-1)*w; const y=h/2 - (agg[t]/mx)*(h/2-6*dpr); if(t===0) trx.moveTo(x,y); else trx.lineTo(x,y); }
+    trx.stroke();
+  }
+
+  // ---- feature meters UI -------------------------------------------------
+  const FEAT_DEFS=[
+    {k:'coherence', name:'subcarrier coherence', fmt:v=>v.toFixed(2), scale:v=>v, hint:'human'},
+    {k:'resp', name:'breathing band', fmt:v=>(v*100).toFixed(0)+'%', scale:v=>Math.min(1,v*2), hint:'human'},
+    {k:'activity', name:'limb / gait band', fmt:v=>(v*100).toFixed(0)+'%', scale:v=>Math.min(1,v*1.3), hint:'human'},
+    {k:'mech', name:'mechanical band', fmt:v=>(v*100).toFixed(0)+'%', scale:v=>Math.min(1,v), hint:'machine'},
+    {k:'periodicity', name:'periodicity', fmt:v=>v.toFixed(2), scale:v=>v, hint:'machine'},
+    {k:'dominant', name:'dominant freq', fmt:v=>v.toFixed(1)+' Hz', scale:v=>Math.min(1,v/10), hint:'machine'},
+  ];
+  const featsEl=document.getElementById('feats'); const featNodes={};
+  for(const d of FEAT_DEFS){ const el=document.createElement('div'); el.className='feat';
+    el.innerHTML=`<span class="k">${d.name} <b data-v>—</b></span><span class="m"><span class="mf${d.hint==='machine'?' warn':''}" data-f></span></span>`;
+    featsEl.appendChild(el); featNodes[d.k]={v:el.querySelector('[data-v]'), f:el.querySelector('[data-f]')}; }
+
+  // ---- UI wiring ---------------------------------------------------------
+  const scEl=document.getElementById('scenarios');
+  SCENES.forEach(s=>{ const b=document.createElement('button'); b.className='scn'; b.type='button'; b.setAttribute('aria-pressed', s.id===scene);
+    b.innerHTML=`<span class="ico">${s.ico}</span>${s.label}<small>${s.hint}</small>`;
+    b.onclick=()=>{ scene=s.id; [...scEl.children].forEach((c,i)=>c.setAttribute('aria-pressed', SCENES[i].id===scene)); };
+    scEl.appendChild(b); });
+
+  const sens=document.getElementById('sens'), sensval=document.getElementById('sensval');
+  sens.oninput=()=>{ ratioK=parseFloat(sens.value); sensval.textContent='×'+ratioK.toFixed(1); };
+
+  const dot=document.getElementById('dot'), stateEl=document.getElementById('state'), stateSub=document.getElementById('statesub');
+  const whoEl=document.getElementById('who'), fillEl=document.getElementById('conffill'), pctEl=document.getElementById('confpct'), agreeEl=document.getElementById('agree');
+
+  // theme toggle (per-viewer convenience)
+  const themeBtn=document.getElementById('theme');
+  function applyTheme(t){ if(t) document.documentElement.setAttribute('data-theme',t); else document.documentElement.removeAttribute('data-theme'); refreshPalette(); buildCmap(); clearScreens(); }
+  let stored=null; try{ stored=localStorage.getItem('wmsense-theme'); }catch(e){}
+  if(stored) applyTheme(stored);
+  themeBtn.onclick=()=>{ const dark=matchMedia('(prefers-color-scheme: dark)').matches; const cur=document.documentElement.getAttribute('data-theme')|| (dark?'dark':'light'); const next=cur==='dark'?'light':'dark'; applyTheme(next); try{ localStorage.setItem('wmsense-theme',next); }catch(e){} };
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{ refreshPalette(); buildCmap(); });
+
+  // ---- vote smoothing ----------------------------------------------------
+  const vote=[]; let lastMotion=false, lastHuman=false;
+  function pushVote(isHuman){ vote.push(isHuman); if(vote.length>6) vote.shift(); const h=vote.filter(Boolean).length; return {human:h>=vote.length/2, agree: Math.max(h,vote.length-h)/vote.length}; }
+
+  function renderStatus(det, f, p){
+    if(det.calibrating){ dot.className='dot'; dot.style.background=PAL.quiet; stateEl.innerHTML='CALIBRATING<br><small>learning the empty-room noise floor…</small>'; whoEl.className='who-label idle'; whoEl.textContent='—'; fillEl.style.width='0%'; pctEl.textContent='awaiting motion'; agreeEl.textContent=''; vote.length=0; lastMotion=false; return; }
+    if(!det.motion){ dot.className='dot'; dot.style.background=PAL.quiet; stateEl.innerHTML=`QUIET<br><small>no motion · floor ${floorMean.toExponential(1)}</small>`; whoEl.className='who-label idle'; whoEl.textContent='—'; fillEl.style.width='0%'; fillEl.style.background=PAL.quiet; pctEl.textContent='no motion'; agreeEl.textContent=''; vote.length=0; lastMotion=false; return; }
+    lastMotion=true; dot.className='dot live';
+    const isHuman=p>=0.5; const sm=pushVote(isHuman); lastHuman=sm.human;
+    dot.style.background=PAL.alert;
+    stateEl.innerHTML=`MOTION<br><small>detected · ${(det.conf*100).toFixed(0)}% confidence</small>`;
+    const conf = sm.human ? p : 1-p;
+    whoEl.className='who-label '+(sm.human?'human':'nonhuman');
+    whoEl.textContent= sm.human? 'HUMAN' : 'NON-HUMAN';
+    fillEl.style.width=(conf*100).toFixed(0)+'%'; fillEl.style.background= sm.human?PAL.human:PAL.nonhuman;
+    pctEl.textContent=`${(conf*100).toFixed(0)}% ${sm.human?'human':'not human'}`;
+    agreeEl.textContent=`${(sm.agree*100).toFixed(0)}% stable`;
+  }
+  function renderFeats(f){ for(const d of FEAT_DEFS){ const node=featNodes[d.k]; if(!f){ node.v.textContent='—'; node.f.style.width='0%'; continue; } const val=f[d.k]; node.v.textContent=d.fmt(val); node.f.style.width=(Math.max(0,Math.min(1,d.scale(val)))*100).toFixed(0)+'%'; } }
+
+  // ---- main loop ---------------------------------------------------------
+  // The capture+analysis pipeline runs on a fixed-rate timer so the sim clock
+  // never depends on requestAnimationFrame (which browsers throttle when a tab
+  // is backgrounded). Drawing runs on rAF for smoothness.
+  let simT=0, hopAcc=0, lastFeat=null, pendingCols=[], needsTrace=false;
+  const dt=1/FS;
+
+  function tick() {
+    simT += dt;
+    const amp = frame(simT); buf.push(amp); if (buf.length > MAXBUF) buf.shift();
+    // compute the dynamic column for the waterfall (queued for the next draw)
+    if (buf.length >= 8) {
+      const w = Math.min(buf.length, WIN_LEN); const mean = new Float64Array(N_SUB);
+      for (let j = buf.length - w; j < buf.length; j++) for (let i = 0; i < N_SUB; i++) mean[i] += buf[j][i];
+      for (let i = 0; i < N_SUB; i++) mean[i] /= w;
+      const d = new Float64Array(N_SUB); for (let i = 0; i < N_SUB; i++) d[i] = (amp[i]/(mean[i]||1e-9)) - 1;
+      pendingCols.push(d); if (pendingCols.length > WIN_LEN) pendingCols.shift();
+    }
+    hopAcc += dt;
+    if (hopAcc >= HOP - 1e-9) { hopAcc = 0;
+      const f = analyse();
+      if (f) { lastFeat = f; const det = detect(f.energy); let p = 0.5; if (det.motion) p = classify(f);
+        renderStatus(det, f, p); renderFeats(det.motion ? f : null); }
+    }
+    needsTrace = true;
+  }
+
+  function draw() {
+    if (pendingCols.length) { for (const c of pendingCols) pushColumn(c); pendingCols.length = 0; }
+    if (needsTrace) { drawTrace(lastFeat ? lastFeat.agg : null); needsTrace = false; }
+    requestAnimationFrame(draw);
+  }
+
+  refreshPalette(); buildCmap(); fitAll();
+  setInterval(tick, 1000 / FS);
+  requestAnimationFrame(draw);
+  let rz; window.addEventListener('resize',()=>{ clearTimeout(rz); rz=setTimeout(fitAll,150); });
+})();
+</script>

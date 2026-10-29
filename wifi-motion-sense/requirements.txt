@@ -1,0 +1,10 @@
+# Core (required)
+numpy>=1.23
+
+# Optional: enables RandomForest classifier + model persistence.
+# Without these, a built-in heuristic classifier is used automatically.
+scikit-learn>=1.2
+joblib>=1.2
+
+# Optional: only for the ESP32 serial capture backend.
+pyserial>=3.5
